@@ -1,0 +1,238 @@
+---
+title: "U.S Undergraduate College Majors in the Early 2010s"
+author: "Kevin Shen"
+date: "2025-06-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# About the Dataset
+
+First, we include the necessary packages and download our dataset.
+```{r}
+library(tidyverse)
+library(fivethirtyeight)
+library(ggtext)
+library(GGally)
+library(ggdendro)
+library(ggrepel)
+
+undergrads <- fivethirtyeight::college_recent_grads 
+```
+
+This dataset is called College Majors, and is from [fivethirtyeight](https://github.com/fivethirtyeight/data/tree/master/college-majors). Its original use was in [this article](https://fivethirtyeight.com/features/the-economic-guide-to-picking-a-college-major/). The data itself was obtained from the American Community Survey 2010-2012 Public Use Microdata Series. You can learn about the documentation of the survey results [here](http://www.census.gov/programs-surveys/acs/technical-documentation/pums.html). There are 3 different datasets provided in the Github link, the one that I used was `recent-grads.csv`, which contains 21 columns and 174 rows. 19 of the variables are quantitative variables and 2 of them are categorical. Most of the quantitative data describes metrics pertaining to gender or the careers of undergraduates aged younger than 28. As for the `major_category` categorical variable, these were taken from the Georgetown University Center on Education and the Workforce report ["What's It Worth?: The Economic Value of College Majors."](http://cew.georgetown.edu/whatsitworth). 
+
+# Research Question 1
+## How do the gender distributions of undergraduate major categories compare to common stereotypes? 
+I wanted to first investigate whether gender stereotypes were reflected in the data. Two common stereotypes are that STEM (Science, Technology, Engineering, Mathematics) majors are predominantly chosen by men and that HEAL (Health, Education, Administration, and Literacy) majors are predominantly chosen by women. To answer this question, I wanted to start by investigating what the distribution of gender and total for each major category looked liked. This meant I needed to compare the conditional distrubtion of `total` against `gender` conditioning on `major_category`, which I chose to do with a side-by-side bar plot.
+```{r}
+undergrads %>%
+  group_by(major_category) %>%
+  summarize(men = sum(men, na.rm = T),
+            women = sum(women, na.rm = T)) %>%
+  mutate(men = men / 1000,
+         women = women / 1000,
+         total = (men + women),
+         major_category = fct_reorder(major_category, total)) %>%
+  pivot_longer(cols = c(women, men), 
+               names_to = "gender", 
+               values_to = "count") %>%
+  mutate(gender = fct_relevel(gender, "women", "men")) %>%
+  ggplot(aes(x = count, y = major_category, fill = gender)) + 
+  geom_col(position = position_dodge(preserve =), show.legend = F) + 
+  scale_fill_manual(breaks = c("men", "women"),
+                    values = c("lightblue", "pink")) + 
+  scale_x_continuous(expand = c(0, 0)) + 
+  theme_minimal() + 
+  labs(title = "College undergraduates by major category (in thousands)",
+       x = "", y = "",
+       subtitle = "<span style = 'color: lightblue;'>**Men**</span> and <span style = 'color: pink;'>**Women**</span> ages 28 and younger") + 
+  theme(panel.grid.major.y = element_blank(),
+        plot.subtitle = element_markdown(hjust = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+From this plot, we have that Business is the most popular, with over 600,000 men and women choosing to major in something under the Business category. The results also (perhaps unfortunately) match with common stereotypes, where some of the STEM major categories such as Computers & Mathematics/Engineering have more men than women, and HEAL major categories such as Humanities & Liberal Arts, Education, and Health having more women than men. 
+
+Since one of the limitations of a side-by-side bar plot is the difficulty of comparing conditional distributions to the joint one, the following plot was made with the intention of more easily viewing the proportional distribution of `gender` conditioning on `major_category`, sorted by the categories which have the most women proportionally in descending order.
+
+```{r}
+undergrads %>%
+  group_by(major_category) %>%
+  summarize(men = sum(men, na.rm = T),
+            women = sum(women, na.rm = T)) %>%
+  mutate(total = (men + women),
+         men = men/total,
+         women = women/total,
+         major_category = fct_reorder(major_category, women)) %>%
+  pivot_longer(cols = c(women, men), 
+               names_to = "gender", 
+               values_to = "count") %>%
+  mutate(gender = fct_relevel(gender, "women", "men")) %>%
+  ggplot(aes(x = count, y = major_category, fill = gender),
+         labels = scales::label_percent()) + 
+  geom_col(show.legend = F) + 
+  geom_vline(xintercept = 0.5) + 
+  scale_fill_manual(breaks = c("men", "women"),
+                    values = c("lightblue", "pink")) + 
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 1),
+                     labels = scales::label_percent(scale = 100)) + 
+  theme_minimal() + 
+  labs(title = "College undergraduates by major category",
+       x = "", y = "",
+       subtitle = "Proportions of <span style = 'color: lightblue;'>**Men**</span> and <span style = 'color: pink;'>**Women**</span> in each category") + 
+  theme(panel.grid.major.y = element_blank(),
+        plot.subtitle = element_markdown(hjust = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+This plot better displays gender distributions by directly comparing proportions. We can see that while most of the major categories corresponding to HEAL have more women in them than men, Health and Education seem to have a much larger difference in gender proportions compared to literacy and administration related major categories. Furthermore, the only STEM related major categories that look to have significantly more men than women in them are Computers & Mathematics and Engineering, while Physical Sciences and Biology & Life Sciences have much closer to equal numbers of men and women majoring in them. 
+# Research Question 2
+## Why did the Business major category have the most undergraduates?
+
+Looking at the first bar plot, it is natural to assume that there is a reason for why Business is the most popular major category. To try to answer this question with the given dataset, I subsequently wanted to investigate what the average employment rate and median income was for business majors. In addition, I also want to see how many majors categorized as Business were responsible for Business being the most popular major category. This meant that I needed to make a new variable `employment_rate` in terms of `unemployment_rate` and plot it against the `total` for each `major`, coloring the ones that were under the Business `major_category` to see which specific Business majors were the most popular.   
+```{r}
+undergrads <- undergrads %>%
+  arrange(desc(total)) %>%
+  mutate(employment_rate = 1 - unemployment_rate)
+
+undergrads %>%
+  mutate(is_business = ifelse(major_category == "Business", "yes", "no"),
+         total = total/1000) %>%
+  ggplot(aes(x = total, y = employment_rate, color = is_business)) + 
+  geom_point(show.legend = F, alpha = 0.5, na.rm = T) + 
+  geom_hline(yintercept = mean(undergrads$employment_rate)) + 
+  scale_color_manual(breaks = c("yes", "no"),
+                    values = c("red", "darkblue")) + 
+  scale_x_continuous(limits = c(-0.1, 400)) + 
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0.8, 1.01),
+                     labels = scales::label_percent()) + 
+  theme_minimal() + 
+  labs(title = "Employment rate of undergraduate majors compared to average",
+       x = "Total undergraduates (in thousands)", y = "",
+       subtitle = "Majors under the <span style = 'color: red;'>**Business**</span> category highlighted") + 
+  theme(plot.subtitle = element_markdown(hjust = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+One can see that it seems that most business majors are clustered pretty close to the average employment rate between 2010 and 2012. In fact, the most popular majors from the Business category are clustered closer to the average than most of the other Business majors. Business being the most popular major category is also not biased by one specific very popular major, as the Business category contributes to 5 of the 12 most popular majors. It also seems that Business majors do not have an advantage in terms of finding a job, since the average employment rates of a majority of Business majors seem to actually be lower than the average.
+
+Next, I wanted to see if Business majors earned more than the median income. To do this, I produced a similar scatterplot, but replaced the `employment_rate` with `median` instead. 
+
+```{r}
+undergrads %>%
+  mutate(is_business = ifelse(major_category == "Business", "yes", "no"),
+         total = total/1000,
+         median = median/1000) %>%
+  ggplot(aes(x = total, y = median, color = is_business)) + 
+  geom_point(show.legend = F, alpha = 0.5, na.rm = T) + 
+  geom_hline(yintercept = mean(undergrads$median/1000)) + 
+  scale_color_manual(breaks = c("yes", "no"),
+                    values = c("red", "darkgreen")) + 
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 120)) + 
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 400)) + 
+  theme_minimal() + 
+  labs(title = "Median income of all undergraduate majors compared to average",
+       x = "Total undergraduates (in thousands)", y = "Median income",
+       subtitle = "Majors under the <span style = 'color: red;'>**Business**</span> category highlighted") + 
+  theme(plot.subtitle = element_markdown(hjust = 0.5),
+        plot.title = element_text(hjust = 0.5))
+```
+
+One can see that business majors once again don't seem to earn higher incomes than expected, where there are several business majors making lower than the median, and several business majors with a median income making higher than the median. Furthermore, a majority of the most common majors make a median income lower than the average median, which conveys the idea that most undergrads are choosing their majors not based on the income they could potentially earn when graduating. 
+
+Both of these plots showed unconvincing potential reasons for why so many students chose to major in business. This led me to suspect that the number of undergraduate students that chose a major categorized as Business was potentially not even statistically significant. I thus decided to compare the distributions of `total`, `median`, and `employment_rate` and whether the difference was statistically significant by using Welch's Two-Sample t-test.
+```{r}
+business <- undergrads %>%
+  filter(major_category == "Business")
+
+non_business <- undergrads %>%
+  filter(major_category != "Business")
+
+total_results <- t.test(business$total, non_business$total)
+median_results <- t.test(business$median, non_business$median)
+er_results <- t.test(business$employment_rate,
+                             non_business$employment_rate)
+total_p_val <- round(total_results$p.value, 2)
+median_p_val <- round(median_results$p.value, 2)
+er_p_val <- round(er_results$p.value, 2)
+```
+
+When comparing the distribution of totals for business undergrads against non-business undergrads, the Welch Two-Sample t-test p-value is `r total_p_val`.
+
+When comparing the distribution of medians for business undergrads against non-business undergrads, the Welch Two-Sample t-test p-value is `r median_p_val`.
+
+When comparing the distribution of employment rates for business undergrads against non-business undergrads, the Welch Two-Sample t-test p-value is `r er_p_val`.
+
+Note that all of these are all greater than 0.05 = 5%. This means that the probability of drawing random samples under the null hypothesis, which assumes the average statistic for majors under the Business major category is the same as the average statistic for majors that are not under the Business major category, is higher than 5%. What can be concluded from these tests is that despite the previous bar plots conveying the idea that majoring in the business category looked to be a lot more popular, we have shown that Business being the most common business category according to the t-test is still **statistically insignificant**. Furthermore, there is **no statistically significant** advantage to picking a major under the Business major category when comparing the distributions of median income and employment rates.
+
+# Research Question 3
+## Do STEM and HEAL as categories of majors have any basis aside from being common majors for men and women to pick respectively?
+
+Following the case study on Business majors, I decided to return to comparing how similar STEM and HEAL majors were by evaluating the similarity based on distance between all the quantitative data. In order to evaluate which major categories were similar high-dimensionally, I used both Multidimensional Scaling (MDS) and a dendrogram. For MDS, I used Euclidean distance, and specifically compared similarity based on all quantitative variables aside from `major_code`.
+
+```{r}
+
+num_cols <- sapply(undergrads, is.numeric)
+undergrads_num <- undergrads[ , num_cols]
+categories <- undergrads$major_category
+keep <- complete.cases(undergrads_num)
+undergrads_num <- undergrads_num[keep, ]
+categories <- categories[keep]
+vars_to_use <- c("total", "employed", "employed_fulltime", "employed_fulltime_yearround", "employed_parttime", "unemployed", "unemployment_rate", "median", "p25th", "p75th", "college_jobs", "non_college_jobs", "low_wage_jobs")
+undergrads_num <- undergrads_num[ , vars_to_use]
+cat_means <- aggregate(undergrads_num, by = list(category = categories),
+  FUN = mean)
+rownames(cat_means) <- cat_means$category
+cat_means$category <- NULL
+cat_scaled <- scale(cat_means)
+d_mat <- dist(cat_scaled, method = "euclidean")
+mds_coords <- cmdscale(d_mat, k = 2)
+mds_df <- data.frame(dim1 = mds_coords[,1], dim2 = mds_coords[,2],
+  category = rownames(mds_coords))
+
+mds_df %>% 
+  ggplot(aes(x = dim1, y = dim2, label = category)) +
+  geom_text_repel(size = 4) +
+  theme_minimal() + 
+  labs(title = "MDS of Undergraduate Major Categories", 
+       x = "MDS Coordinate 1", y = "MDS Coordinate 2") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+From the following graph, it appears that most major categories are similar, with the outliers being Business and Engineering. While Education, Health, Humanities & Liberal Arts, and Arts are all pretty closely grouped, the distance between the major categories Biology & Life Science, Physical Sciences, Computers & Mathematics are small, but Engineering is much farther from the rest of the STEM major categories in comparison. This leads to the idea that while HEAL is a valid grouping beyond which major categories are predominantly picked by which genders, the same is harder to say for STEM. 
+
+Since the MDS plot uses `geom_text_repel`, it might be easier to compare the differences using a dendrogram instead. The dendrogram uses complete linkage and Hierarchical Clustering as a method. The quantitative variables used are the same as for MDS. 
+```{r}
+
+hc_cat <- hclust(d_mat, method = "complete")
+
+dendro_data <- dendro_data(hc_cat, type = "rectangle")
+
+ggplot() + geom_segment(data = segment(dendro_data),
+    aes(x = y, y = x, xend = yend, yend = xend)) +
+  geom_text(data = label(dendro_data), aes(x = y, y = x, label = label),
+    hjust = -0.1, vjust = -0.4, size  = 4) +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()) +
+  labs(title = "Dendrogram of Undergraduate Major Categories") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+When using other clustering methods, it seems that the constructed dendrogram was exactly the same. One can see that Engineering indeed is spaced quite farther away from the rest of the STEM major categories. Furthermore, with clustering instead of Euclidean distance dimensionality reduction methods, it appears that HEAL major categories have a sharp split in them as well, where the Humanities & Liberal Arts and Art major categories are quite distant from Health and Education. Thus, we can conclude that neither HEAL and STEM major categories seem to have a valid reason to be grouped when looking at just the employment and income stats of each major within each category.
+
+# Conclusions
+The biggest takeaway from the study of this dataset is that STEM and HEAL are decidedly grouped together based on gender stereotypes, and not based on income or employment stats. Furthermore, even the most popular majors seem to not be chosen based on income or employment stats. The most popular major category itself being so popular is also not statistically significant despite what the visually comparing the bar plots would seem to convey. Lastly, when looking at the distributions of gender proportions for all major categories, a majority of major categories are dominated by women, where only two major categories are male-dominated, and four major categories are relatively even in terms of men and women choosing majors in them. 
+
+# Future Work
+One of the biggest struggles of working with this dataset was the way the data was organized. Since there are 174 different majors, it was quite difficult to produce graphs around them, forcing me instead to work with major categories, which loses a lot of important details. This, for example, can be seen in the scatterplots, where the most popular major ended up not belonging to the most popular major category. Future work should instead focus on looking at specific major categories to arrive at more sound conclusions that aren't abstracted across all possible college majors. Furthermore, another challenge of the dataset was the focus on quantitative data such as income and employment statistics. In the future, if the data exists, it would be interesting to compare some more categorical variables pertaining to each major as well. Lastly, this project focused on undergraduate majors. Fivethirtyeight itself contains datasets for both graduate students and their majors as well as a dataset for all students, both undergraduate and graduate. Some of the information, such as employment and income statistics, isn't provided for the graduate students, so if the data is obtained, future work should focus on examining that data statistically.
